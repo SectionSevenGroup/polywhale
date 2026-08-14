@@ -7,9 +7,10 @@ export async function GET() {
     const [signals, whales, stats, activity] = await Promise.all([
       query(`SELECT id,title,slug,event_slug,outcome,signal_score,label,whale_count,total_notional,avg_entry,current_price,
         spread,depth_usd,edge_remaining,components,wallets,last_seen_at
-        FROM signals WHERE updated_at > NOW() - INTERVAL '90 minutes'
+        FROM signals WHERE updated_at > NOW() - INTERVAL '90 minutes' AND signal_score >= 60
         ORDER BY signal_score DESC,total_notional DESC LIMIT 20`),
       query(`SELECT wallet,username,pnl,volume,whale_score,all_rank,month_rank,week_rank,categories
+        ,copyability_score,hit_rate,closed_positions
         FROM whales WHERE tracked=TRUE ORDER BY whale_score DESC LIMIT 20`),
       query<{tracked:string; strong:string; notional:string}>(`SELECT
         (SELECT count(*) FROM whales WHERE tracked=TRUE)::text tracked,
@@ -18,7 +19,11 @@ export async function GET() {
       query(`SELECT t.title,t.outcome,t.side,t.notional,t.price,t.traded_at,w.username,w.wallet,w.whale_score
         FROM trades t JOIN whales w ON w.wallet=t.wallet ORDER BY t.traded_at DESC LIMIT 30`),
     ]);
-    return Response.json({ signals, whales, stats: stats[0], activity, generatedAt: new Date().toISOString() });
+    const history = await query(`SELECT e.event_id::text signal_id,e.horizon,e.observed_price,
+      e.price_move_since_alert price_change,e.whale_entry_edge,e.evaluated_at,s.title,s.outcome,s.signal_score,'immutable_v1' measurement_version
+      FROM signal_event_evaluations e JOIN signal_events s ON s.id=e.event_id
+      WHERE e.evaluated_at IS NOT NULL ORDER BY e.evaluated_at DESC LIMIT 30`);
+    return Response.json({ signals, whales, stats: stats[0], activity, history, generatedAt: new Date().toISOString(), stale: false });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Dashboard query failed" }, { status: 500 });
   }

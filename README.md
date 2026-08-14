@@ -21,7 +21,9 @@ npm run worker
 npm run dev
 ```
 
-`DATABASE_URL` must point to PostgreSQL. The web dashboard shows labelled demo cards if the database API is unavailable, making visual development possible before the worker is running.
+Run `npm run validate:live` to exercise all public REST dependencies in one live, fixture-free cascade and print their observed keys and representative records. This command intentionally fails if the network or an upstream endpoint is unavailable.
+
+`DATABASE_URL` must point to PostgreSQL. The dashboard never presents fixtures as live data: it shows explicit loading, empty, stale, and database-error states.
 
 ## Architecture
 `worker/index.ts`
@@ -40,4 +42,18 @@ npm run dev
 - refreshes every 15 seconds
 
 ## Scoring caveat
-The included scoring engine is deliberately labelled heuristic. PnL/volume is **not ROI**. The next stage is historical validation: closed positions, forward price movement after whale entries, concentration penalties and copyability. See `CODEX_TASK.md`.
+Whale Edge Score blends leaderboard persistence, the explicitly labelled PnL/volume efficiency proxy, category breadth, closed-position hit rate, sample depth and observed forward edge. Copyability is kept separate. Signal Score is capped for one independent wallet and penalises age, spread/depth, a price move that has already run, and near-resolution risk. Scores are prioritisation heuristics—not probabilities, advice, or true ROI.
+
+## Public API assumptions and current limitations
+- The worker uses only the documented public hosts: Data API `/v1/leaderboard`, `/trades`, `/positions`, and `/closed-positions`; Gamma `/markets`; CLOB `/book`, `/midpoint`, and `/prices-history`. No credentials, signing, order methods, website scraping, or geolocation workarounds exist.
+- Data API trade timestamps are treated as Unix seconds and token `asset` values as CLOB token IDs. Leaderboard monetary fields are treated as PnL and volume, never ROI.
+- Gamma array filters are encoded as repeated `condition_ids` query parameters. CLOB near-book depth explicitly sorts levels before selecting the closest eight levels on each side, rather than assuming response ordering.
+- Split fills sharing wallet + transaction + asset + side are one conviction. Wallets sharing transaction hashes are conservatively linked. This is an initial heuristic; robust funding/behaviour clustering is not yet implemented.
+- The database schedules +5m, +30m, and +4h observations. The schema supports resolution observations, but automatic Gamma resolution reconciliation is still incomplete. Historical price reconstruction and Brier/calibration metrics remain incomplete where the public history cannot reconstruct the exact detection-time book.
+- Alert adapters, public market WebSocket updates, a dedicated whale-detail route, and outbound Telegram/email delivery are not included in this pass. Polling remains read-only, retrying with exponential backoff and a bounded sequential request pattern.
+- API rate limits are not a stability guarantee; deployment operators should tune polling intervals and monitor 429 responses.
+
+## Immutable signal events
+`signals` is intentionally a mutable live projection. Backtests never evaluate against it. A qualifying score (60+) is copied into an immutable `signal_events` snapshot, and its `signal_event_evaluations` rows calculate price move from the frozen detection midpoint and whale-entry edge from the frozen weighted entry.
+
+A subsequent poll creates a new event only when at least one deterministic material-change rule is met: an independent whale joins; the label changes; notional increases by both at least 25% and $1,000; or the midpoint moves by at least $0.03. Identical and sub-threshold polls do not create events. Legacy `signal_history` rows are retained and marked `legacy_mutable_v0`; they are non-equivalent to immutable V1 measurements.
