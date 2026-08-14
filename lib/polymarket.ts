@@ -1,5 +1,6 @@
 const DATA = "https://data-api.polymarket.com";
 const CLOB = "https://clob.polymarket.com";
+const GAMMA = "https://gamma-api.polymarket.com";
 
 export type Category =
   | "OVERALL" | "POLITICS" | "SPORTS" | "ESPORTS" | "CRYPTO"
@@ -56,6 +57,13 @@ export interface Position {
   endDate?: string;
 }
 
+export interface ClosedPosition extends Position {
+  realizedPnl: number;
+  endDate?: string;
+}
+
+export interface PricePoint { t: number; p: number }
+
 export interface BookLevel { price: string; size: string }
 export interface OrderBook {
   market: string;
@@ -65,13 +73,26 @@ export interface OrderBook {
   last_trade_price?: string;
 }
 
-async function json<T>(url: string): Promise<T> {
-  const response = await fetch(url, {
-    headers: { "user-agent": "polywhale/0.1" },
-    cache: "no-store"
-  });
-  if (!response.ok) throw new Error(`${response.status} ${response.statusText}: ${url}`);
-  return response.json() as Promise<T>;
+export async function fetchJson<T>(url: string, attempts = 4, fetcher: typeof fetch = fetch): Promise<T> {
+  let last: Error | undefined;
+  for (let attempt = 0; attempt < attempts; attempt++) {
+    try {
+      const response = await fetcher(url, { headers: { "user-agent": "polywhale/1.0" }, cache: "no-store" });
+      if (response.ok) {
+        const value: unknown = await response.json();
+        if (value == null) throw new Error(`Empty JSON response: ${url}`);
+        return value as T;
+      }
+      if (response.status !== 429 && response.status < 500) throw new Error(`${response.status} ${response.statusText}: ${url}`);
+      const retryAfter = Number(response.headers.get("retry-after") ?? 0) * 1000;
+      last = new Error(`${response.status} ${response.statusText}: ${url}`);
+      await new Promise(resolve => setTimeout(resolve, retryAfter || Math.min(4000, 250 * 2 ** attempt)));
+    } catch (error) {
+      last = error instanceof Error ? error : new Error(String(error));
+      if (attempt < attempts - 1) await new Promise(resolve => setTimeout(resolve, Math.min(4000, 250 * 2 ** attempt)));
+    }
+  }
+  throw last ?? new Error(`Request failed: ${url}`);
 }
 
 export async function fetchLeaderboard(
@@ -82,28 +103,50 @@ export async function fetchLeaderboard(
   offset = 0,
 ) {
   const q = new URLSearchParams({ category, timePeriod, orderBy, limit: String(limit), offset: String(offset) });
-  return json<LeaderboardRow[]>(`${DATA}/v1/leaderboard?${q}`);
+  const rows = await fetchJson<unknown>(`${DATA}/v1/leaderboard?${q}`);
+  return Array.isArray(rows) ? rows as LeaderboardRow[] : [];
 }
 
 export async function fetchTrades(user: string, start?: number, limit = 100) {
   const q = new URLSearchParams({ user, limit: String(limit), takerOnly: "true" });
   if (start) q.set("start", String(start));
-  return json<PublicTrade[]>(`${DATA}/trades?${q}`);
+  const rows = await fetchJson<unknown>(`${DATA}/trades?${q}`);
+  return Array.isArray(rows) ? rows as PublicTrade[] : [];
 }
 
 export async function fetchPositions(user: string, limit = 500) {
   const q = new URLSearchParams({ user, limit: String(limit), sizeThreshold: "0" });
-  return json<Position[]>(`${DATA}/positions?${q}`);
+  const rows = await fetchJson<unknown>(`${DATA}/positions?${q}`);
+  return Array.isArray(rows) ? rows as Position[] : [];
+}
+
+export async function fetchClosedPositions(user: string, limit = 50, offset = 0) {
+  const q = new URLSearchParams({ user, limit: String(limit), offset: String(offset), sortBy: "TIMESTAMP", sortDirection: "DESC" });
+  const rows = await fetchJson<unknown>(`${DATA}/closed-positions?${q}`);
+  return Array.isArray(rows) ? rows as ClosedPosition[] : [];
+}
+
+export async function fetchPriceHistory(asset: string, interval = "max", fidelity = 1) {
+  const q = new URLSearchParams({ market: asset, interval, fidelity: String(fidelity) });
+  const data = await fetchJson<{history?: PricePoint[]}>(`${CLOB}/prices-history?${q}`);
+  return Array.isArray(data.history) ? data.history : [];
+}
+
+export async function fetchMarkets(conditionIds: string[]) {
+  if (!conditionIds.length) return [];
+  const q = new URLSearchParams({ condition_ids: conditionIds.join(","), limit: String(conditionIds.length) });
+  const rows = await fetchJson<unknown>(`${GAMMA}/markets?${q}`);
+  return Array.isArray(rows) ? rows : [];
 }
 
 export async function fetchBook(asset: string) {
-  return json<OrderBook>(`${CLOB}/book?token_id=${encodeURIComponent(asset)}`);
+  return fetchJson<OrderBook>(`${CLOB}/book?token_id=${encodeURIComponent(asset)}`);
 }
 
 export async function fetchMidpoint(asset: string): Promise<number | null> {
   try {
     const q = new URLSearchParams({ token_id: asset });
-    const data = await json<{ mid: string }>(`${CLOB}/midpoint?${q}`);
+    const data = await fetchJson<{ mid: string }>(`${CLOB}/midpoint?${q}`);
     return Number(data.mid);
   } catch {
     return null;
