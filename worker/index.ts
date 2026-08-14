@@ -4,12 +4,15 @@ import {
   bookMetrics,
   fetchBook,
   fetchLeaderboard,
+  fetchClosedPositions,
+  fetchMidpoint,
   fetchTrades,
   type Category,
   type Period,
   type PublicTrade,
 } from "../lib/polymarket";
 import { scoreSignal, scoreWhale } from "../lib/scoring";
+import { dedupeFills } from "../lib/signals";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const POLL_SECONDS = Number(process.env.POLL_SECONDS ?? 20);
@@ -50,6 +53,9 @@ async function refreshWhales() {
         if (period === "WEEK") agg.weekRank = Math.min(agg.weekRank ?? 999999, Number(row.rank));
         if (category !== "OVERALL") agg.categories.add(category);
         map.set(wallet, agg);
+        await query(`INSERT INTO leaderboard_snapshots(wallet,category,period,rank,pnl,volume,captured_at)
+          VALUES($1,$2,$3,$4,$5,$6,date_trunc('minute',NOW())) ON CONFLICT DO NOTHING`,
+          [wallet, category, period, Number(row.rank), Number(row.pnl) || 0, Number(row.vol) || 0]);
       }
       await sleep(80);
     }
@@ -82,6 +88,24 @@ async function refreshWhales() {
   console.log(`[whales] refreshed ${ranked.length}`);
 }
 
+async function ingestOutcomes() {
+  const whales = await query<{wallet:string}>(`SELECT wallet FROM whales WHERE tracked=TRUE ORDER BY whale_score DESC LIMIT 100`);
+  for (const { wallet } of whales) {
+    try {
+      const positions = await fetchClosedPositions(wallet, 50);
+      for (const p of positions) await query(`INSERT INTO closed_positions(wallet,condition_id,asset_id,title,outcome,avg_price,total_bought,realized_pnl,end_date)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9) ON CONFLICT(wallet,condition_id,asset_id) DO UPDATE SET
+        realized_pnl=EXCLUDED.realized_pnl,total_bought=EXCLUDED.total_bought,end_date=EXCLUDED.end_date,ingested_at=NOW()`,
+        [wallet,p.conditionId,p.asset,p.title,p.outcome,p.avgPrice,p.totalBought,p.realizedPnl,p.endDate ?? null]);
+      await query(`UPDATE whales w SET closed_positions=s.n,hit_rate=s.hit,copyability_score=s.copy FROM
+        (SELECT wallet,count(*)::int n,avg((realized_pnl>0)::int) hit,
+         round(least(100,greatest(0,50+avg(realized_pnl/nullif(total_bought,0))*200)))::int copy
+         FROM closed_positions WHERE wallet=$1 GROUP BY wallet) s WHERE w.wallet=s.wallet`, [wallet]);
+    } catch (error) { console.error(`[positions] ${wallet}`, error); }
+    await sleep(50);
+  }
+}
+
 function tradeId(t: PublicTrade) {
   return crypto.createHash("sha256").update([
     t.proxyWallet.toLowerCase(), t.transactionHash, t.asset, t.side, t.timestamp, t.size, t.price
@@ -97,7 +121,7 @@ async function ingestTrades() {
 
   for (const whale of whales) {
     try {
-      const trades = await fetchTrades(whale.wallet, start, 100);
+      const trades = dedupeFills(await fetchTrades(whale.wallet, start, 100));
       for (const t of trades) {
         await query(
           `INSERT INTO trades(id,wallet,transaction_hash,condition_id,asset_id,title,slug,event_slug,outcome,side,size,price,notional,traded_at)
@@ -106,6 +130,10 @@ async function ingestTrades() {
           [tradeId(t), whale.wallet, t.transactionHash, t.conditionId, t.asset, t.title, t.slug, t.eventSlug ?? null,
             t.outcome, t.side, t.size, t.price, t.size * t.price, t.timestamp]
         );
+        await query(`INSERT INTO wallet_links(wallet_a,wallet_b,reason)
+          SELECT least($1,wallet),greatest($1,wallet),'shared_transaction' FROM trades
+          WHERE transaction_hash=$2 AND wallet<>$1 ON CONFLICT(wallet_a,wallet_b,reason) DO UPDATE SET evidence_count=wallet_links.evidence_count+1,updated_at=NOW()`,
+          [whale.wallet,t.transactionHash]);
       }
     } catch (err) {
       console.error(`[trades] ${whale.wallet}`, err);
@@ -118,7 +146,7 @@ async function rebuildSignals() {
   const groups = await query<{
     condition_id:string; asset_id:string; title:string; slug:string; event_slug:string|null; outcome:string;
     whale_count:string; total_notional:string; avg_entry:string; first_seen:string; last_seen:string;
-    weighted_quality:string; wallets: unknown;
+    weighted_quality:string; wallets: unknown; independent_count:string;
   }>(
     `SELECT t.condition_id, t.asset_id, max(t.title) title, max(t.slug) slug, max(t.event_slug) event_slug, t.outcome,
        count(DISTINCT t.wallet)::text whale_count,
@@ -126,6 +154,9 @@ async function rebuildSignals() {
        (sum(t.price*t.notional)/nullif(sum(t.notional),0))::text avg_entry,
        min(t.traded_at)::text first_seen, max(t.traded_at)::text last_seen,
        (sum(w.whale_score*t.notional)/nullif(sum(t.notional),0))::text weighted_quality,
+       greatest(1,count(DISTINCT t.wallet)-coalesce((SELECT count(*) FROM wallet_links l WHERE
+         l.wallet_a IN (SELECT tx.wallet FROM trades tx WHERE tx.condition_id=t.condition_id AND tx.asset_id=t.asset_id AND tx.traded_at>=NOW()-($1::text||' minutes')::interval)
+         AND l.wallet_b IN (SELECT tx.wallet FROM trades tx WHERE tx.condition_id=t.condition_id AND tx.asset_id=t.asset_id AND tx.traded_at>=NOW()-($1::text||' minutes')::interval)),0))::text independent_count,
        jsonb_agg(DISTINCT jsonb_build_object('wallet',t.wallet,'score',w.whale_score,'username',w.username)) wallets
      FROM trades t JOIN whales w ON w.wallet=t.wallet
      WHERE t.side='BUY' AND t.traded_at >= NOW() - ($1::text || ' minutes')::interval AND w.tracked=TRUE
@@ -144,6 +175,7 @@ async function rebuildSignals() {
     const result = scoreSignal({
       weightedWhaleQuality: Number(g.weighted_quality),
       whaleCount: Number(g.whale_count),
+      independentWhaleCount: Number(g.independent_count),
       totalNotional: Number(g.total_notional),
       avgEntry,
       currentPrice: current,
@@ -166,6 +198,20 @@ async function rebuildSignals() {
        Number(g.total_notional),avgEntry,current,metrics.spread,metrics.depthUsd,edgeRemaining,JSON.stringify(result.components),
        JSON.stringify(g.wallets),new Date(g.first_seen),new Date(g.last_seen)]
     );
+    for (const [horizon, seconds] of [["5m",300],["30m",1800],["4h",14400]] as const) {
+      await query(`INSERT INTO signal_history(signal_id,horizon,due_at) VALUES($1,$2,$3::timestamptz + ($4 * interval '1 second')) ON CONFLICT DO NOTHING`,
+        [id,horizon,new Date(g.last_seen),seconds]);
+    }
+  }
+}
+
+async function evaluateSignals() {
+  const due = await query<{signal_id:string;horizon:string;asset_id:string;avg_entry:number}>(`SELECT h.signal_id,h.horizon,s.asset_id,s.avg_entry
+    FROM signal_history h JOIN signals s ON s.id=h.signal_id WHERE h.evaluated_at IS NULL AND h.due_at<=NOW() LIMIT 50`);
+  for (const item of due) {
+    const price = await fetchMidpoint(item.asset_id);
+    if (price != null) await query(`UPDATE signal_history SET evaluated_at=NOW(),observed_price=$3,price_change=$3-$4 WHERE signal_id=$1 AND horizon=$2`,
+      [item.signal_id,item.horizon,price,item.avg_entry]);
   }
 }
 
@@ -177,10 +223,12 @@ async function main() {
     try {
       if (now - lastLeaderboardRefresh > LEADERBOARD_REFRESH_MINUTES * 60_000) {
         await refreshWhales();
+        await ingestOutcomes();
         lastLeaderboardRefresh = now;
       }
       await ingestTrades();
       await rebuildSignals();
+      await evaluateSignals();
     } catch (err) {
       console.error("[worker] cycle failed", err);
     }

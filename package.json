@@ -8,7 +8,8 @@
     "start": "next start",
     "worker": "tsx worker/index.ts",
     "db:init": "tsx db/init.ts",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test tests/**/*.test.ts"
   },
   "dependencies": {
     "next": "^15.2.0",
