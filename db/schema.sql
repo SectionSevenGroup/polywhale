@@ -108,6 +108,16 @@ CREATE TABLE IF NOT EXISTS signal_events (
 );
 CREATE INDEX IF NOT EXISTS signal_events_latest_idx ON signal_events(signal_id, detected_at DESC);
 
+-- Existing immutable V1 events may have been emitted by price movement alone.
+-- Preserve them, classify them as legacy, and exclude them from clean cohorts.
+ALTER TABLE signal_events ADD COLUMN IF NOT EXISTS thesis_key TEXT;
+UPDATE signal_events SET thesis_key=lower(btrim(condition_id) || '|' || btrim(asset_id) || '|' || btrim(outcome)) WHERE thesis_key IS NULL;
+ALTER TABLE signal_events ALTER COLUMN thesis_key SET NOT NULL;
+ALTER TABLE signal_events ADD COLUMN IF NOT EXISTS event_version TEXT NOT NULL DEFAULT 'legacy_v1_price_possible';
+ALTER TABLE signal_events ADD COLUMN IF NOT EXISTS trigger_reason TEXT NOT NULL DEFAULT 'legacy_unknown';
+ALTER TABLE signal_events ADD COLUMN IF NOT EXISTS calibration_eligible BOOLEAN NOT NULL DEFAULT FALSE;
+CREATE INDEX IF NOT EXISTS signal_events_thesis_idx ON signal_events(thesis_key, detected_at DESC);
+
 CREATE OR REPLACE FUNCTION reject_signal_event_mutation() RETURNS TRIGGER AS $$
 BEGIN
   RAISE EXCEPTION 'signal_events are immutable';
@@ -130,6 +140,19 @@ CREATE TABLE IF NOT EXISTS signal_event_evaluations (
   PRIMARY KEY(event_id, horizon)
 );
 CREATE INDEX IF NOT EXISTS signal_event_evaluations_due_idx ON signal_event_evaluations(due_at) WHERE evaluated_at IS NULL;
+
+CREATE OR REPLACE VIEW signal_performance_summary AS
+SELECT 'event'::text grain,e.horizon,count(*)::bigint observations,
+  avg(e.price_move_since_alert) avg_price_move_since_alert,avg(e.whale_entry_edge) avg_whale_entry_edge
+FROM signal_event_evaluations e JOIN signal_events s ON s.id=e.event_id
+WHERE e.evaluated_at IS NOT NULL AND s.calibration_eligible=TRUE GROUP BY e.horizon
+UNION ALL
+SELECT 'thesis'::text grain,x.horizon,count(*)::bigint observations,
+  avg(x.price_move_since_alert),avg(x.whale_entry_edge)
+FROM (SELECT DISTINCT ON (s.thesis_key,e.horizon) s.thesis_key,e.horizon,e.price_move_since_alert,e.whale_entry_edge
+  FROM signal_event_evaluations e JOIN signal_events s ON s.id=e.event_id
+  WHERE e.evaluated_at IS NOT NULL AND s.calibration_eligible=TRUE
+  ORDER BY s.thesis_key,e.horizon,s.detected_at DESC) x GROUP BY x.horizon;
 
 CREATE TABLE IF NOT EXISTS signal_history (
   signal_id TEXT NOT NULL REFERENCES signals(id) ON DELETE CASCADE, horizon TEXT NOT NULL CHECK(horizon IN ('5m','30m','4h','resolution')),

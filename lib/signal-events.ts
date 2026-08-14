@@ -2,7 +2,7 @@ import type { SignalLabel } from "./scoring";
 
 export const MATERIAL_NOTIONAL_RATIO = 1.25;
 export const MATERIAL_NOTIONAL_MIN_USD = 1_000;
-export const MATERIAL_PRICE_MOVE = 0.03;
+export type MaterialSignalReason = "initial_detection" | "independent_whale_joined" | "label_changed_on_new_flow" | "material_notional_increase";
 
 export interface FrozenSignalState {
   signalScore: number;
@@ -25,22 +25,37 @@ export function freezeSignalEvent(input: SignalEventSnapshot): Readonly<SignalEv
 
 /**
  * A new event represents a genuinely different setup, not another worker poll.
- * It is material when an independent wallet joins, the score changes label, flow
- * grows by both 25% and $1k, or the detection midpoint moves by at least 3 cents.
+ * It is material when an independent wallet joins, a label changes alongside new
+ * whale flow, or qualifying notional grows by both 25% and $1k. Price is ignored.
  */
 export function isMaterialSignalChange(previous: FrozenSignalState | null, next: FrozenSignalState) {
-  if (!previous) return true;
-  if (next.independentWhaleCount > previous.independentWhaleCount) return true;
-  if (next.label !== previous.label) return true;
+  return materialSignalReason(previous, next) !== null;
+}
+
+export function materialSignalReason(previous: FrozenSignalState | null, next: FrozenSignalState): MaterialSignalReason | null {
+  if (!previous) return "initial_detection";
+  if (next.independentWhaleCount > previous.independentWhaleCount) return "independent_whale_joined";
   const notionalIncrease = next.totalNotional - previous.totalNotional;
-  if (notionalIncrease >= MATERIAL_NOTIONAL_MIN_USD && next.totalNotional >= previous.totalNotional * MATERIAL_NOTIONAL_RATIO) return true;
-  if (previous.marketMidpoint != null && next.marketMidpoint != null && Math.abs(next.marketMidpoint - previous.marketMidpoint) + Number.EPSILON * 10 >= MATERIAL_PRICE_MOVE) return true;
-  return false;
+  if (next.label !== previous.label && notionalIncrease > 0) return "label_changed_on_new_flow";
+  if (notionalIncrease >= MATERIAL_NOTIONAL_MIN_USD && next.totalNotional >= previous.totalNotional * MATERIAL_NOTIONAL_RATIO) return "material_notional_increase";
+  return null;
 }
 
 export function evaluationEdges(observedPrice: number, marketPriceAtDetection: number | null, whaleEntryAtDetection: number) {
   return {
     priceMoveSinceAlert: marketPriceAtDetection == null ? null : observedPrice - marketPriceAtDetection,
     whaleEntryEdge: observedPrice - whaleEntryAtDetection,
+  };
+}
+
+export function thesisKey(conditionId: string, assetId: string, outcome: string) {
+  return [conditionId.trim().toLowerCase(), assetId.trim().toLowerCase(), outcome.trim().toLowerCase()].join("|");
+}
+
+export interface PerformanceObservation { thesisKey: string; horizon: string; priceMoveSinceAlert: number | null; whaleEntryEdge: number | null }
+export function performanceCounts(rows: PerformanceObservation[]) {
+  return {
+    eventObservations: rows.length,
+    uniqueThesisObservations: new Set(rows.map(row => `${row.thesisKey}|${row.horizon}`)).size,
   };
 }

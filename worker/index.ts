@@ -13,7 +13,7 @@ import {
 } from "../lib/polymarket";
 import { scoreSignal, scoreWhale } from "../lib/scoring";
 import { dedupeFills } from "../lib/signals";
-import { evaluationEdges, isMaterialSignalChange, type FrozenSignalState } from "../lib/signal-events";
+import { evaluationEdges, materialSignalReason, thesisKey, type FrozenSignalState } from "../lib/signal-events";
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 const POLL_SECONDS = Number(process.env.POLL_SECONDS ?? 20);
@@ -208,19 +208,21 @@ async function rebuildSignals() {
       signalScore: result.score, label: result.label, independentWhaleCount: Number(g.independent_count),
       totalNotional: Number(g.total_notional), marketMidpoint: current,
     };
-    if (result.score >= 60 && isMaterialSignalChange(previous ? {
+    const reason = materialSignalReason(previous ? {
       signalScore: previous.signal_score, label: previous.label, independentWhaleCount: previous.independent_whale_count,
       totalNotional: previous.total_notional, marketMidpoint: previous.market_midpoint,
-    } : null, next)) {
+    } : null, next);
+    if (result.score >= 60 && reason) {
       const eventId = crypto.randomUUID();
       const detectedAt = new Date();
       await query(`INSERT INTO signal_events(id,signal_id,condition_id,asset_id,outcome,detected_at,signal_score,label,
         weighted_whale_quality,independent_whale_count,wallets,total_notional,avg_whale_entry,market_midpoint,best_bid,best_ask,
-        spread,depth_usd,edge_remaining,freshness_score,components)
-        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::jsonb)`,
+        spread,depth_usd,edge_remaining,freshness_score,components,thesis_key,event_version,trigger_reason,calibration_eligible)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11::jsonb,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21::jsonb,$22,'whale_information_v2',$23,TRUE)`,
         [eventId,id,g.condition_id,g.asset_id,g.outcome,detectedAt,result.score,result.label,Number(g.weighted_quality),
           Number(g.independent_count),JSON.stringify(g.wallets),Number(g.total_notional),avgEntry,current,metrics.bestBid,metrics.bestAsk,
-          metrics.spread,metrics.depthUsd,edgeRemaining,result.components.freshness,JSON.stringify(result.components)]);
+          metrics.spread,metrics.depthUsd,edgeRemaining,result.components.freshness,JSON.stringify(result.components),
+          thesisKey(g.condition_id,g.asset_id,g.outcome),reason]);
       for (const [horizon, seconds] of [["5m",300],["30m",1800],["4h",14400]] as const) {
         await query(`INSERT INTO signal_event_evaluations(event_id,horizon,due_at) VALUES($1,$2,$3::timestamptz + ($4 * interval '1 second'))`,
           [eventId,horizon,detectedAt,seconds]);

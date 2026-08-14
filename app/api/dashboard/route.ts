@@ -19,11 +19,12 @@ export async function GET() {
       query(`SELECT t.title,t.outcome,t.side,t.notional,t.price,t.traded_at,w.username,w.wallet,w.whale_score
         FROM trades t JOIN whales w ON w.wallet=t.wallet ORDER BY t.traded_at DESC LIMIT 30`),
     ]);
-    const history = await query(`SELECT e.event_id::text signal_id,e.horizon,e.observed_price,
-      e.price_move_since_alert price_change,e.whale_entry_edge,e.evaluated_at,s.title,s.outcome,s.signal_score,'immutable_v1' measurement_version
+    const [history, performanceSummary] = await Promise.all([query(`SELECT e.event_id::text signal_id,e.horizon,e.observed_price,
+      e.price_move_since_alert price_change,e.whale_entry_edge,e.evaluated_at,s.title,s.outcome,s.signal_score,s.event_version measurement_version,s.thesis_key
       FROM signal_event_evaluations e JOIN signal_events s ON s.id=e.event_id
-      WHERE e.evaluated_at IS NOT NULL ORDER BY e.evaluated_at DESC LIMIT 30`);
-    return Response.json({ signals, whales, stats: stats[0], activity, history, generatedAt: new Date().toISOString(), stale: false });
+      WHERE e.evaluated_at IS NOT NULL ORDER BY e.evaluated_at DESC LIMIT 30`),
+      query(`SELECT grain,horizon,observations,avg_price_move_since_alert,avg_whale_entry_edge FROM signal_performance_summary ORDER BY horizon,grain`)]);
+    return Response.json({ signals, whales, stats: stats[0], activity, history, performanceSummary, generatedAt: new Date().toISOString(), stale: false });
   } catch (error) {
     return Response.json({ error: error instanceof Error ? error.message : "Dashboard query failed" }, { status: 500 });
   }
