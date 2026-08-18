@@ -1,4 +1,5 @@
 export const dynamic = "force-dynamic";
+import { getEdgeStatus } from "@/lib/edge-status";
 
 const SUPABASE_URL = process.env.SUPABASE_URL;
 const SUPABASE_ANON_KEY = process.env.SUPABASE_ANON_KEY;
@@ -23,6 +24,7 @@ async function rest<T>(path: string): Promise<T> {
 }
 
 export async function GET() {
+  // Dashboard contract: activity, history, performanceSummary, generatedAt; signal_score >= 60.
   try {
     const now = Date.now();
     const since90 = new Date(now - 90 * 60_000).toISOString();
@@ -61,7 +63,7 @@ export async function GET() {
       .reduce((sum, s) => sum + Number(s.total_notional || 0), 0);
 
     return Response.json({
-      signals,
+      signals: signals.map(s=>({...s,edge_status:getEdgeStatus({avg_entry:Number(s.avg_entry),current_price:s.current_price==null?null:Number(s.current_price),spread:s.spread==null?null:Number(s.spread),depth_usd:s.depth_usd==null?null:Number(s.depth_usd),whale_count:Number(s.whale_count),last_seen_at:s.last_seen_at},now)})),
       whales: whales.slice(0, 20),
       stats: {
         tracked: String(whales.length),
