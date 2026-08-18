@@ -28,15 +28,18 @@ export async function GET() {
     const since90 = new Date(now - 90 * 60_000).toISOString();
     const since30 = new Date(now - 30 * 60_000).toISOString();
 
-    const [signals, whales, activity] = await Promise.all([
+    const [signals, whales, activity, performanceSummary] = await Promise.all([
       rest<any[]>(
         `signals?select=id,title,slug,event_slug,outcome,signal_score,label,whale_count,total_notional,avg_entry,current_price,spread,depth_usd,edge_remaining,components,wallets,last_seen_at,updated_at&signal_score=gte.60&updated_at=gte.${encodeURIComponent(since90)}&order=signal_score.desc,total_notional.desc&limit=20`
       ),
       rest<any[]>(
-        "whales?select=wallet,username,pnl,volume,whale_score,all_rank,month_rank,week_rank,categories,tracked&tracked=eq.true&order=whale_score.desc&limit=500"
+        "whales?select=wallet,username,pnl,volume,whale_score,copyability_score,hit_rate,closed_positions,all_rank,month_rank,week_rank,categories,tracked&tracked=eq.true&order=whale_score.desc&limit=500"
       ),
       rest<any[]>(
         "trades?select=title,outcome,side,notional,price,traded_at,wallet&order=traded_at.desc&limit=30"
+      ),
+      rest<any[]>(
+        "signal_performance_summary?select=grain,horizon,observations,avg_price_move_since_alert,avg_whale_entry_edge&order=horizon.asc,grain.asc"
       ),
     ]);
 
@@ -50,7 +53,9 @@ export async function GET() {
       };
     });
 
-    const strong = signals.filter(s => Number(s.signal_score) >= 72 && new Date(s.updated_at).getTime() >= new Date(since30).getTime()).length;
+    const strong = signals.filter(
+      s => Number(s.signal_score) >= 72 && new Date(s.updated_at).getTime() >= new Date(since30).getTime()
+    ).length;
     const notional = signals
       .filter(s => new Date(s.updated_at).getTime() >= new Date(since30).getTime())
       .reduce((sum, s) => sum + Number(s.total_notional || 0), 0);
@@ -64,7 +69,10 @@ export async function GET() {
         notional: String(notional),
       },
       activity: activityWithWhales,
+      history: [],
+      performanceSummary,
       generatedAt: new Date().toISOString(),
+      stale: false,
     });
   } catch (error) {
     return Response.json(

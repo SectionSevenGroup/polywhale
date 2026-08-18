@@ -1,4 +1,5 @@
 export type SignalLabel = "HIGH CONVICTION" | "STRONG" | "WATCH" | "PASS";
+export const signalLabel = (score: number): SignalLabel => score >= 85 ? "HIGH CONVICTION" : score >= 72 ? "STRONG" : score >= 60 ? "WATCH" : "PASS";
 
 const clamp = (n: number, min = 0, max = 100) => Math.min(max, Math.max(min, n));
 const rankScore = (rank?: number | null) => rank ? clamp(105 - Math.log10(rank + 1) * 42) : 25;
@@ -10,6 +11,10 @@ export interface WhaleScoreInput {
   monthRank?: number | null;
   weekRank?: number | null;
   categoryAppearances?: number;
+  closedPositions?: number;
+  hitRate?: number | null;
+  concentration?: number;
+  medianImprovement?: number | null;
 }
 
 /**
@@ -27,13 +32,14 @@ export function scoreWhale(x: WhaleScoreInput) {
     rankScore(x.weekRank) * 0.20
   );
   const categoryBreadth = clamp((x.categoryAppearances ?? 1) * 13, 15, 90);
+  const sample = clamp(Math.log10(Math.max(1, x.closedPositions ?? 0) + 1) * 38);
+  const outcomes = x.hitRate == null ? 50 : clamp(x.hitRate * 100);
+  const forwardEdge = x.medianImprovement == null ? 50 : clamp(50 + x.medianImprovement * 800);
+  const concentrationPenalty = clamp((x.concentration ?? 0) * 25, 0, 25);
 
   const score =
-    efficiencyScore * 0.30 +
-    persistence * 0.30 +
-    pnlScale * 0.18 +
-    volumeScale * 0.12 +
-    categoryBreadth * 0.10;
+    efficiencyScore * 0.19 + persistence * 0.22 + pnlScale * 0.12 + volumeScale * 0.07 +
+    categoryBreadth * 0.08 + sample * 0.10 + outcomes * 0.12 + forwardEdge * 0.10 - concentrationPenalty;
 
   return Math.round(clamp(score));
 }
@@ -48,12 +54,15 @@ export interface SignalScoreInput {
   depthUsd: number;
   ageSeconds: number;
   sameDirectionRatio?: number;
+  independentWhaleCount?: number;
+  minutesToResolution?: number | null;
 }
 
 export function scoreSignal(x: SignalScoreInput) {
   const quality = clamp(x.weightedWhaleQuality);
+  const independent = x.independentWhaleCount ?? x.whaleCount;
   const consensus = clamp(
-    32 + Math.max(0, x.whaleCount - 1) * 17 + ((x.sameDirectionRatio ?? 1) - 0.5) * 30,
+    18 + Math.max(0, independent - 1) * 22 + ((x.sameDirectionRatio ?? 1) - 0.5) * 22,
     20,
     100,
   );
@@ -71,9 +80,10 @@ export function scoreSignal(x: SignalScoreInput) {
     edgeRemaining = move <= 0.005 ? 100 : move <= 0.02 ? 82 : move <= 0.05 ? 58 : move <= 0.10 ? 30 : 8;
   }
 
-  const freshness = clamp(100 - (x.ageSeconds / 60) * 6.5);
+  let freshness = clamp(100 - (x.ageSeconds / 60) * 7.5);
+  if (x.minutesToResolution != null && x.minutesToResolution < 60) freshness *= .45;
 
-  const score = clamp(
+  let score = clamp(
     quality * 0.34 +
     consensus * 0.20 +
     conviction * 0.13 +
@@ -81,9 +91,11 @@ export function scoreSignal(x: SignalScoreInput) {
     edgeRemaining * 0.14 +
     freshness * 0.06,
   );
+  if (independent <= 1) score = Math.min(score, 69);
+  if (x.spread != null && x.spread > .08) score = Math.min(score, 59);
 
   const rounded = Math.round(score);
-  const label: SignalLabel = rounded >= 85 ? "HIGH CONVICTION" : rounded >= 72 ? "STRONG" : rounded >= 60 ? "WATCH" : "PASS";
+  const label = signalLabel(rounded);
 
   return {
     score: rounded,
