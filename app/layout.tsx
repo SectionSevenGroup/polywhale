@@ -1,5 +1,6 @@
 import "./globals.css";
 import "./polish.css";
+import "./scenario.css";
 
 export const metadata = {
   title: "POLY WHALE | Signal Control Room",
