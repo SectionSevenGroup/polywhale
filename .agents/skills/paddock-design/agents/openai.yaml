@@ -1,0 +1,4 @@
+interface:
+  display_name: "Paddock Design"
+  short_description: "Apple-grounded UX, UI, brand and agent-ready design"
+  default_prompt: "Use $paddock-design to review or improve this experience using our approved aesthetic, Apple guidance and agent-ready design contracts."
