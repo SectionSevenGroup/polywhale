@@ -1,0 +1,4 @@
+interface:
+  display_name: "Dieter Rams Design"
+  short_description: "Apply Rams principles to useful, restrained products"
+  default_prompt: "Use $dieter-rams-design to review this product and improve its usefulness, clarity and finish."

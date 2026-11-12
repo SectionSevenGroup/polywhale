@@ -1,0 +1,19 @@
+{
+  "version": "1.0.0",
+  "sourceCommit": "7e5a60c0d6761e3f760840f0c7bba41b5757eafd",
+  "files": {
+    ".agents/skills/apple-ux-ui/SKILL.md": "3046e4f12f478a7a0b92655ac979194158908b5b67e4da0c56a3c15c815565dd",
+    ".agents/skills/dieter-rams-design/SKILL.md": "258bfa59defc0cc8fbb2803ba7c102d43ca9917e0796ef94241debf43138fbfa",
+    ".agents/skills/dieter-rams-design/agents/openai.yaml": "d31e06d38afa341b45db28773d9d5ae206e13abebb8c956b45457d3cdf42be7f",
+    ".agents/skills/dieter-rams-design/references/principles-and-philosophy.md": "0a42a95e2e43f912ff2a10927d1c57d68636735129a762e3177be57ef7a13d7c",
+    ".agents/skills/dieter-rams-design/references/review-checklist.md": "c1a8c2e2799c2abc8be8c9ba4b24f9efae47f16d51e47c59fb44b3c60c20e1b4",
+    ".agents/skills/paddock-context-governor/SKILL.md": "9659a813a1a0283eb80d77ebe8723346b22f471b0e9781ad1cafb9f717ee7ce5",
+    ".agents/skills/paddock-design/SKILL.md": "d0ffd679a93e03b8b633ceea1f9e4d5538f50cc9665e5ff8b1a7f03fd8c22aaf",
+    ".agents/skills/paddock-design/agents/openai.yaml": "d1dd64debf50ef3b84fa60c3cb29413c7ffa5274efbb76db3f733e0c6b4dd2c7",
+    ".agents/skills/paddock-design/references/agent-ready.md": "7f39d31b6e227a68eeffd746e455f4c49596b110891e13e50a0410a0b675908f",
+    ".agents/skills/paddock-design/references/apple-sources.md": "fd48b9510bf77faa708eafdbadd929c0ece3c5194e5546f2ec135161711f046c",
+    ".agents/skills/paddock-design/references/design-lenses.md": "1ab9eab012a17692c3f5e8277b0e87bf4c2d6e650a55bc31e7042eaa3a6b275f",
+    ".agents/skills/paddock-design/references/house-aesthetic.md": "e5c168b75ca23b10c742a5cbd055a266ba8dc359f6abc59a9e618f644fd2d4d3",
+    ".agents/skills/paddock-ive-design/SKILL.md": "8da2f0790bde343540cd6a2d1b73101f9806e48b59a25dde24a92a4ab943d5d6"
+  }
+}
